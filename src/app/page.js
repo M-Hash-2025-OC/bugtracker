@@ -2,16 +2,6 @@
 
 import { useState, useEffect } from "react";
 
-/**
- * GitHub Issues Dashboard Page
- *
- * Behavior:
- * - Persists valid/invalid/issueless lists to localStorage.
- * - Polls /api/issues with validIds & invalidIds so backend omits them.
- * - Adds only genuinely new issues and repos.
- * - If a previously-issueless repo gets an issue, it is removed from issueless and its new issue(s) are added.
- */
-
 const LS_KEYS = {
   VALID: "gh_valid_issues_v1",
   INVALID: "gh_invalid_issues_v1",
@@ -19,16 +9,16 @@ const LS_KEYS = {
 };
 
 export default function Page() {
-  const [issues, setIssues] = useState([]); // Unmarked issues
+  const [issues, setIssues] = useState([]);
   const [issuelessRepos, setIssuelessRepos] = useState([]);
   const [validIssues, setValidIssues] = useState([]);
   const [invalidIssues, setInvalidIssues] = useState([]);
+  const [expandedIssueId, setExpandedIssueId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  const POLL_INTERVAL = 15000; // 15s
+  const POLL_INTERVAL = 15000;
 
-  // Helpers
   const idsFrom = (arr) => (arr && arr.length ? arr.map((i) => i.id) : []);
 
   const uniqueById = (arr) => {
@@ -44,7 +34,6 @@ export default function Page() {
     return out;
   };
 
-  // Load persisted state on mount, then do initial fetch (passing persisted arrays so first fetch excludes them)
   useEffect(() => {
     try {
       const pValid = JSON.parse(localStorage.getItem(LS_KEYS.VALID) || "[]");
@@ -55,18 +44,13 @@ export default function Page() {
       if (Array.isArray(pInvalid) && pInvalid.length) setInvalidIssues(pInvalid);
       if (Array.isArray(pIssueless) && pIssueless.length) setIssuelessRepos(pIssueless);
 
-      // Call initial fetch with overrides (to ensure exclude lists are applied immediately)
       fetchIssues(pValid || [], pInvalid || []);
     } catch (err) {
-      // If JSON parse fails, ignore and start fresh
       console.warn("Failed to load persisted lists:", err);
       fetchIssues();
     }
+  }, []);
 
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // run once
-
-  // Persist whenever valid/invalid/issueless change
   useEffect(() => {
     try {
       localStorage.setItem(LS_KEYS.VALID, JSON.stringify(validIssues));
@@ -77,21 +61,13 @@ export default function Page() {
     }
   }, [validIssues, invalidIssues, issuelessRepos]);
 
-  // Polling effect: recreates interval when valid/invalid sets change so excludeIds are up-to-date
   useEffect(() => {
     const interval = setInterval(() => fetchIssues(), POLL_INTERVAL);
     return () => clearInterval(interval);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [validIssues, invalidIssues]); // re-create interval if validated/invalidated sets change
+  }, [validIssues, invalidIssues]);
 
-  /**
-   * Fetch issues from backend, passing optional overrides for valid/invalid arrays (used on initial load).
-   * - Merge only new issues into `issues` state.
-   * - Keep `validIssues` and `invalidIssues` untouched.
-   * - Update issuelessRepos: remove repos that now have issues; append only genuinely new issueless repos.
-   */
   async function fetchIssues(validOverride = null, invalidOverride = null) {
-    setError(""); // clear prior errors
+    setError("");
     try {
       const validArr = Array.isArray(validOverride) ? validOverride : validIssues;
       const invalidArr = Array.isArray(invalidOverride) ? invalidOverride : invalidIssues;
@@ -99,7 +75,6 @@ export default function Page() {
       const validIds = idsFrom(validArr).join(",");
       const invalidIds = idsFrom(invalidArr).join(",");
 
-      // Append query params only when non-empty to avoid trailing commas
       const q = new URLSearchParams();
       if (validIds) q.set("validIds", validIds);
       if (invalidIds) q.set("invalidIds", invalidIds);
@@ -109,27 +84,21 @@ export default function Page() {
         const text = await res.text().catch(() => "");
         throw new Error(`Server returned ${res.status} ${text}`);
       }
-      const data = await res.json();
 
+      const data = await res.json();
       if (!data || !("issues" in data) || !("issuelessRepos" in data)) {
         setError("Invalid data received from server");
         setLoading(false);
         return;
       }
 
-      // repos that currently have issues (from this response)
       const reposWithIssuesSet = new Set((data.issues || []).map((i) => i.repo).filter(Boolean));
 
-      // 1) Update issuelessRepos:
-      //    - remove any previously-known issueless repo that now has issues
-      //    - add only new repos from server that aren't already known (and are not in reposWithIssuesSet)
       setIssuelessRepos((prev) => {
         const prevMap = new Map(prev.map((r) => [r.name, r]));
-        // remove repos that now have issues
         for (const name of reposWithIssuesSet) {
           if (prevMap.has(name)) prevMap.delete(name);
         }
-        // add new server-provided issueless repos that are not present and not in reposWithIssuesSet
         for (const r of data.issuelessRepos || []) {
           if (!prevMap.has(r.name) && !reposWithIssuesSet.has(r.name)) {
             prevMap.set(r.name, r);
@@ -138,16 +107,12 @@ export default function Page() {
         return Array.from(prevMap.values());
       });
 
-      // 2) Update issues:
-      //    - avoid adding any issue that already exists in (issues, validIssues, invalidIssues)
-      //    - keep existing order, append genuinely new ones
       setIssues((prev) => {
         const existingIdSet = new Set([
           ...prev.map((i) => i.id),
           ...validIssues.map((i) => i.id),
           ...invalidIssues.map((i) => i.id),
         ]);
-        // new issues from server that are not in existingIdSet
         const newIssues = (data.issues || []).filter((i) => !existingIdSet.has(i.id));
         if (!newIssues.length) return prev;
         const merged = [...prev, ...newIssues];
@@ -162,16 +127,17 @@ export default function Page() {
   }
 
   const markValid = (issue) => {
-    // append to valid, remove from issues; backend will be queried with this id excluded
     setValidIssues((prev) => uniqueById([...prev, issue]));
     setIssues((prev) => prev.filter((i) => i.id !== issue.id));
-    // Also, if this was the only issue in a repo and repo is currently in issueless (unlikely),
-    // we leave issueless alone — backend filtering handles not creating false issue-less entries.
   };
 
   const markInvalid = (issue) => {
     setInvalidIssues((prev) => uniqueById([...prev, issue]));
     setIssues((prev) => prev.filter((i) => i.id !== issue.id));
+  };
+
+  const toggleExpand = (id) => {
+    setExpandedIssueId((prev) => (prev === id ? null : id));
   };
 
   const exportCSV = (data, filename) => {
@@ -187,6 +153,34 @@ export default function Page() {
     link.href = URL.createObjectURL(blob);
     link.download = filename;
     link.click();
+  };
+
+  const parseBody = (body) => {
+    if (!body) return null;
+    const elements = [];
+    let lastIndex = 0;
+    // match ![alt](url)
+    const regex = /!\[.*?\]\((https?:\/\/[^\s)]+)\)/g;
+    let match;
+    while ((match = regex.exec(body)) !== null) {
+      const index = match.index;
+      if (index > lastIndex) {
+        elements.push(body.substring(lastIndex, index));
+      }
+      elements.push(
+        <img
+          key={index}
+          src={match[1]}
+          alt=""
+          className="max-w-full rounded-md shadow-sm my-2"
+        />
+      );
+      lastIndex = regex.lastIndex;
+    }
+    if (lastIndex < body.length) {
+      elements.push(body.substring(lastIndex));
+    }
+    return elements;
   };
 
   const renderTable = (data, includeActions = false) => (
@@ -213,8 +207,32 @@ export default function Page() {
               className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 transition transform hover:-translate-y-1 hover:shadow-lg duration-200 rounded-lg"
             >
               <td className="px-4 py-3 border">
-                {issue.title || "(No issues)"}{" "}
-                {issue.repo ? ` / ${issue.repo}` : issue.name ? ` / ${issue.name}` : ""}
+                <div className="font-medium">
+                  {issue.title || "(No issues)"}{" "}
+                  {issue.repo ? ` / ${issue.repo}` : issue.name ? ` / ${issue.name}` : ""}
+                </div>
+                {issue.body && (
+                  <div className="mt-2">
+                    {expandedIssueId === issue.id ? (
+                      <div className="max-w-full">
+                        {parseBody(issue.body)}
+                        <button
+                          onClick={() => toggleExpand(issue.id)}
+                          className="text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-200 text-sm mt-2"
+                        >
+                          Show less
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => toggleExpand(issue.id)}
+                        className="text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-200 text-sm mt-1"
+                      >
+                        Show more
+                      </button>
+                    )}
+                  </div>
+                )}
               </td>
               <td className="px-4 py-3 border">
                 {issue.reporterTeam || ""} {issue.reporter ? `(${issue.reporter})` : ""}
@@ -222,13 +240,13 @@ export default function Page() {
               {includeActions && (
                 <td className="px-4 py-3 border space-x-2">
                   <button
-                    className="bg-green-500 hover:bg-green-600 text-white px-3 py-1 rounded-md shadow-md transition transform hover:scale-105"
+                    className="bg-green-500 hover:bg-green-600 text-white px-3 py-1 rounded-md shadow-md"
                     onClick={() => markValid(issue)}
                   >
                     Mark Valid
                   </button>
                   <button
-                    className="bg-red-500 hover:bg-red-600 text-white px-3 py-1 rounded-md shadow-md transition transform hover:scale-105"
+                    className="bg-red-500 hover:bg-red-600 text-white px-3 py-1 rounded-md shadow-md"
                     onClick={() => markInvalid(issue)}
                   >
                     Mark Invalid
