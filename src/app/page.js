@@ -19,12 +19,6 @@ export default function Page() {
       setLoading(false);
     }
   };
-// useEffect(() => {
-//   setIssues([
-//     { id: "1", title: "Test Issue", repo: "demo", reporter: "you", createdAt: new Date(), status: "UNMARKED" }
-//   ]);
-//   setLoading(false);
-// }, []);
 
   useEffect(() => {
     fetchIssues(); 
