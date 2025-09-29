@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 export async function GET(req) {
   const token = process.env.GITHUB_TOKEN;
-  const org = "testingDev1903"; // replace with your org
+  const org = "M-Hash-2025-OC"; // replace with your org
 
   const headers = {
     Authorization: `Bearer ${token}`,
